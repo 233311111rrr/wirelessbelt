@@ -1,0 +1,63 @@
+plugins {
+    id 'java'
+}
+
+version = '1.0'
+
+ext {
+    // Mindustry v8 Build 160.6 API.
+    mindustryVersion = 'v160.6'
+}
+
+sourceCompatibility = JavaVersion.VERSION_17
+targetCompatibility = JavaVersion.VERSION_17
+
+repositories {
+    mavenCentral()
+
+    // Official Mindustry release dependencies.jar repository.
+    ivy {
+        url = uri('https://github.com/')
+        patternLayout {
+            artifact('/[organisation]/[module]/releases/download/[revision]/dependencies.jar')
+        }
+        metadataSources { artifact() }
+        content {
+            includeVersion('Anuken', 'Mindustry', mindustryVersion)
+        }
+    }
+}
+
+dependencies {
+    // Mindustry supplies these classes at runtime; never bundle the game API in the mod JAR.
+    compileOnly "Anuken:Mindustry:${mindustryVersion}"
+}
+
+sourceSets {
+    main {
+        java.srcDirs = ['src']
+        resources.srcDirs = ['assets']
+    }
+}
+
+processResources {
+    from('.') {
+        include 'mod.json'
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+jar {
+    archiveBaseName = 'wirelessbelt'
+    archiveVersion = project.version.toString()
+}
+
+// Convenience task: ./gradlew buildMod
+// The resulting desktop-testing JAR is build/libs/wirelessbelt-1.0.jar
+ tasks.register('buildMod') {
+    dependsOn tasks.named('jar')
+}
