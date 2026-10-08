@@ -1,0 +1,33 @@
+name: Build Android jar
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Build jar
+        run: gradle jar --no-daemon
+      - name: Convert to Android dex
+        run: |
+          set -e
+          BT=$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)
+          AJ=$(ls -d $ANDROID_HOME/platforms/android-* | sort -V | tail -1)/android.jar
+          curl -L -o deps.jar https://github.com/Anuken/Mindustry/releases/download/v160.6/dependencies.jar
+          mkdir dex
+          $BT/d8 --release --min-api 21 --lib $AJ --classpath deps.jar --output dex build/libs/wirelessbelt-1.0.jar
+          cp build/libs/wirelessbelt-1.0.jar wirelessbelt-android.jar
+          (cd dex && zip -u ../wirelessbelt-android.jar classes.dex)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wirelessbelt-android
+          path: wirelessbelt-android.jar
