@@ -24,9 +24,9 @@ import static mindustry.Vars.*;
  */
 public class WirelessBelt extends Block{
     /** 傳輸距離(格)。原版橋接傳送帶為 4 格，5 倍 = 20 格 */
-    public float range = 4f * 5f;
+    public float range = 4f * 80f;
     /** 每搬運 1 個物品所需 tick。2.5 約為橋接傳送帶的 2 倍速度(請實測後微調) */
-    public float transferTime = 2.5f;
+    public float transferTime = 4f;
 
     public final boolean sender;
 
