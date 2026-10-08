@@ -4,6 +4,7 @@ import arc.graphics.*;
 import arc.graphics.g2d.*;
 import arc.math.*;
 import arc.scene.ui.layout.*;
+import arc.struct.*;
 import arc.util.*;
 import arc.util.io.*;
 import mindustry.content.*;
@@ -17,13 +18,14 @@ import mindustry.world.meta.*;
 import static mindustry.Vars.*;
 
 /**
- * 無線傳送帶：發送端(sender) 與 接收端(receiver) 一對一綁定。
- * 發送端：從任意邊接收物品，符合過濾條件的物品進入 500 容量緩衝並無線傳給接收端；
+ * 無線傳送帶：發送端(sender) 與 接收端(receiver)，連結數量不限(多對多)。
+ * 發送端：從任意邊接收物品，符合過濾條件的物品進入 500 容量緩衝，
+ *         並輪流無線傳給所有已連結且未滿的接收端；
  *         不符合的物品直接穿過，由其他方向相鄰的輸送帶輸出。
  * 接收端：收到物品後，從任意邊輸出到相鄰的輸送帶/方塊。
  */
 public class WirelessBelt extends Block{
-    /** 傳輸距離(格)。原版橋接傳送帶為 4 格，5 倍 = 20 格 */
+    /** 傳輸距離(格)。原版橋接傳送帶為 4 格，這裡是 80 倍 = 320 格 */
     public float range = 4f * 80f;
     /** 每搬運 1 個物品所需 tick。2.5 約為橋接傳送帶的 2 倍速度(請實測後微調) */
     public float transferTime = 1f;
@@ -66,9 +68,9 @@ public class WirelessBelt extends Block{
 
         buildType = WirelessBuild::new;
 
-        //設定發送端連結的接收端座標(-1 = 解除)
+        //切換連結：已連結則解除，未連結則建立
         config(Integer.class, (WirelessBuild b, Integer pos) -> {
-            if(WirelessBelt.this.sender) b.setLink(pos);
+            if(WirelessBelt.this.sender) b.toggleLink(pos);
         });
         //設定指定傳送的物品
         config(Item.class, (WirelessBuild b, Item item) -> b.sortItem = item);
@@ -89,30 +91,25 @@ public class WirelessBelt extends Block{
     }
 
     public class WirelessBuild extends Building{
-        /** 發送端：已綁定接收端的位置，-1 為未綁定 */
-        public int link = -1;
-        /** 接收端：已綁定發送端的位置，-1 為未綁定 */
-        public int from = -1;
+        /** 已連結的對端位置(發送端存接收端，接收端存發送端)，數量不限 */
+        public IntSeq links = new IntSeq();
         /** 發送端：指定傳送的物品，null = 全部傳送 */
         public Item sortItem;
 
-        public float moveAcc, anim;
+        public float moveAcc, anim, checkTimer;
         public Item lastItem;
-        public int passIndex;
+        public int passIndex, rr;
 
         public Color color(){
             return sender ? senderColor : receiverColor;
         }
 
-        /** 目前有效的對端(發送端回傳接收端，接收端回傳發送端)，無效則回傳 null。不會修改狀態。 */
-        public WirelessBuild partner(){
-            int p = sender ? link : from;
-            if(p == -1) return null;
-            Building b = world.build(p);
+        /** 第 i 個連結對象，無效則回傳 null。不會修改狀態。 */
+        public WirelessBuild linkAt(int i){
+            Building b = world.build(links.get(i));
             if(!(b instanceof WirelessBuild) || !b.isValid() || b.team != team) return null;
             WirelessBuild w = (WirelessBuild)b;
             if(w.block == block) return null; //必須是另一種(收/送)
-            if(sender ? w.from != pos() : w.link != pos()) return null;
             return w;
         }
 
@@ -121,47 +118,37 @@ public class WirelessBelt extends Block{
             if(!(other instanceof WirelessBuild) || other.team != team) return false;
             WirelessBuild r = (WirelessBuild)other;
             if(r.block == block) return false;
-            if(!within(other, range * tilesize)) return false;
-            //一個接收端只能被一個發送端佔用
-            if(r.from != -1 && r.from != pos()){
-                Building s = world.build(r.from);
-                if(s instanceof WirelessBuild && s.isValid() && ((WirelessBuild)s).link == r.pos()) return false;
-            }
-            return true;
+            return within(other, range * tilesize);
         }
 
-        public void setLink(int newPos){
-            //解除舊連結
-            if(link != -1){
-                Building old = world.build(link);
-                if(old instanceof WirelessBuild && ((WirelessBuild)old).from == pos()){
-                    ((WirelessBuild)old).from = -1;
-                }
-                link = -1;
-            }
-            if(newPos == -1) return;
-            Building nb = world.build(newPos);
-            if(canLink(nb)){
-                link = newPos;
-                ((WirelessBuild)nb).from = pos();
+        /** 已連結則解除，否則建立連結(僅發送端呼叫) */
+        public void toggleLink(int p){
+            Building nb = world.build(p);
+            if(links.contains(p)){
+                links.removeValue(p);
+                if(nb instanceof WirelessBuild) ((WirelessBuild)nb).links.removeValue(pos());
+            }else if(canLink(nb)){
+                links.add(p);
+                WirelessBuild r = (WirelessBuild)nb;
+                if(!r.links.contains(pos())) r.links.add(pos());
             }
         }
 
         @Override
         public boolean onConfigureBuildTapped(Building other){
+            if(other == this) return true;
             if(sender){
-                if(link == other.pos()){
-                    configure(-1);
-                    return false;
-                }
-                if(canLink(other)){
+                if(links.contains(other.pos()) || canLink(other)){
                     configure(other.pos());
                     return false;
                 }
-            }else if(other instanceof WirelessBuild && ((WirelessBuild)other).canLink(this)){
-                //選到接收端後點發送端，也可以建立連結
-                other.configure(pos());
-                return false;
+            }else if(other instanceof WirelessBuild){
+                WirelessBuild s = (WirelessBuild)other;
+                if(s.links.contains(pos()) || s.canLink(this)){
+                    //選到接收端後點發送端，也可以切換連結
+                    s.configure(pos());
+                    return false;
+                }
             }
             return true;
         }
@@ -169,20 +156,17 @@ public class WirelessBelt extends Block{
         @Override
         public void onRemoved(){
             super.onRemoved();
-            if(sender){
-                if(link != -1) setLink(-1);
-            }else if(from != -1){
-                Building s = world.build(from);
-                if(s instanceof WirelessBuild && ((WirelessBuild)s).link == pos()){
-                    ((WirelessBuild)s).link = -1;
-                }
+            for(int i = 0; i < links.size; i++){
+                Building b = world.build(links.get(i));
+                if(b instanceof WirelessBuild) ((WirelessBuild)b).links.removeValue(pos());
             }
+            links.clear();
         }
 
         // ---------- 物品進出 ----------
 
         boolean buffers(Item item){
-            return (sortItem == null || item == sortItem) && partner() != null;
+            return (sortItem == null || item == sortItem) && links.size > 0;
         }
 
         /** 不符合條件的物品：找出其他方向可接收的相鄰方塊(輪流分配) */
@@ -219,29 +203,46 @@ public class WirelessBelt extends Block{
             if(t != null) t.handleItem(this, item);
         }
 
+        /** 輪流挑選下一個還有空間的接收端 */
+        WirelessBuild nextReceiver(){
+            int n = links.size;
+            for(int i = 0; i < n; i++){
+                int idx = (rr + i) % n;
+                WirelessBuild r = linkAt(idx);
+                if(r != null && r.items.total() < itemCapacity){
+                    rr = (idx + 1) % n;
+                    return r;
+                }
+            }
+            return null;
+        }
+
         // ---------- 更新 ----------
 
         @Override
         public void updateTile(){
-            WirelessBuild p = partner();
-            if(p == null){
-                //清除失效連結
-                if(sender && link != -1) link = -1;
-                if(!sender && from != -1) from = -1;
+            //定期清除失效連結
+            checkTimer += Time.delta;
+            if(checkTimer > 60f){
+                checkTimer = 0f;
+                for(int i = links.size - 1; i >= 0; i--){
+                    if(linkAt(i) == null) links.removeIndex(i);
+                }
             }
 
             if(sender){
-                if(p != null && efficiency > 0f && items.total() > 0){
+                if(links.size > 0 && efficiency > 0f && items.total() > 0){
                     moveAcc += edelta();
                     int guard = 0;
                     while(moveAcc >= transferTime && items.total() > 0 && guard++ < 8){
-                        if(p.items.total() >= itemCapacity){
+                        WirelessBuild r = nextReceiver();
+                        if(r == null){
                             moveAcc = Math.min(moveAcc, transferTime);
                             break;
                         }
                         Item it = items.take();
                         if(it == null) break;
-                        p.handleItem(this, it);
+                        r.handleItem(this, it);
                         lastItem = it;
                         anim = 1f;
                         moveAcc -= transferTime;
@@ -284,10 +285,12 @@ public class WirelessBelt extends Block{
             Draw.alpha(anim * 0.25f * (0.7f + Mathf.absin(Time.time, 6f, 0.3f)));
             Fill.square(x, y, block.size * tilesize / 2f - 2f);
 
-            //傳輸動畫只由發送端畫一次
+            //傳輸動畫只由發送端畫，連線到每一個接收端
             if(sender){
-                WirelessBuild r = partner();
-                if(r != null){
+                for(int k = 0; k < links.size; k++){
+                    WirelessBuild r = linkAt(k);
+                    if(r == null) continue;
+
                     float dx = r.x - x, dy = r.y - y;
                     float len = Mathf.len(dx, dy);
                     int dots = Math.max(3, (int)(len / 14f));
@@ -321,8 +324,9 @@ public class WirelessBelt extends Block{
             float sin = Mathf.absin(Time.time, 6f, 1f);
             Drawf.dashCircle(x, y, range * tilesize, color());
             Drawf.circles(x, y, block.size * tilesize / 2f + 1f + sin - 2f, color());
-            WirelessBuild p = partner();
-            if(p != null){
+            for(int i = 0; i < links.size; i++){
+                WirelessBuild p = linkAt(i);
+                if(p == null) continue;
                 Drawf.circles(p.x, p.y, block.size * tilesize / 2f + 1f + sin - 2f, p.color());
                 Drawf.arrow(sender ? x : p.x, sender ? y : p.y, sender ? p.x : x, sender ? p.y : y,
                     block.size * tilesize / 2f + sin, 4f + sin, color());
@@ -334,7 +338,7 @@ public class WirelessBelt extends Block{
         @Override
         public void buildConfiguration(Table table){
             if(sender){
-                ItemSelection.buildTable(table, content.items(), () -> sortItem, this::configure);
+                ItemSelection.buildTable(WirelessBelt.this, table, content.items(), () -> sortItem, this::configure);
             }
         }
 
@@ -346,18 +350,32 @@ public class WirelessBelt extends Block{
         // ---------- 存檔 ----------
 
         @Override
+        public byte version(){
+            return 1;
+        }
+
+        @Override
         public void write(Writes write){
             super.write(write);
-            write.i(link);
-            write.i(from);
+            write.i(links.size);
+            for(int i = 0; i < links.size; i++) write.i(links.get(i));
             write.s(sortItem == null ? -1 : sortItem.id);
         }
 
         @Override
         public void read(Reads read, byte revision){
             super.read(read, revision);
-            link = read.i();
-            from = read.i();
+            links.clear();
+            if(revision >= 1){
+                int n = read.i();
+                for(int i = 0; i < n; i++) links.add(read.i());
+            }else{
+                //舊版存檔：link / from 各一個
+                int a = read.i();
+                int b = read.i();
+                if(a != -1) links.add(a);
+                if(b != -1 && b != a) links.add(b);
+            }
             int id = read.s();
             sortItem = id == -1 ? null : content.item(id);
         }
