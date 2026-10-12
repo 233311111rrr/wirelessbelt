@@ -2,7 +2,7 @@
     "name": "wirelessbelt",
     "displayName": "Wireless Belt",
     "author": "your-name",
-    "description": "Wireless 2x2 item belt. Paired sender / receiver, 5x bridge range, item filter, 500 buffer.",
+    "description": "Wireless item belt (many-to-many, direct turret links), heat-limited big batteries (x5/x10/x20/x30) and an ultra high speed drill.",
     "version": "1.0",
     "minGameVersion": 160,
     "main": "wirelessbelt.WirelessBeltMod",
