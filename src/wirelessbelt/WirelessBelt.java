@@ -10,6 +10,7 @@ import arc.util.io.*;
 import mindustry.content.*;
 import mindustry.gen.*;
 import mindustry.graphics.*;
+import mindustry.ui.*;
 import mindustry.type.*;
 import mindustry.world.*;
 import mindustry.world.blocks.*;
@@ -72,6 +73,8 @@ public class WirelessBelt extends Block{
         config(Integer.class, (WirelessBuild b, Integer pos) -> {
             if(WirelessBelt.this.sender) b.toggleLink(pos);
         });
+        //清除全部連結(設定面板的取消按鈕)
+        config(Boolean.class, (WirelessBuild b, Boolean v) -> b.clearLinks());
         //設定指定傳送的物品
         config(Item.class, (WirelessBuild b, Item item) -> b.sortItem = item);
         configClear((WirelessBuild b) -> b.sortItem = null);
@@ -138,17 +141,34 @@ public class WirelessBelt extends Block{
                 links.removeValue(p);
                 if(nb instanceof WirelessBuild) ((WirelessBuild)nb).links.removeValue(pos());
                 //解除連結：紅色閃光
-                if(nb != null) Fx.healBlockFull.at(nb.x, nb.y, 0f, Pal.remove, nb.block);
+                if(nb != null) flash(nb, Pal.remove);
             }else if(canLink(nb)){
                 links.add(p);
-                //建立連結：發送端顏色閃光，方便確認有點到
-                Fx.healBlockFull.at(nb.x, nb.y, 0f, senderColor, nb.block);
                 //接收端會記住發送端；一般建築不需要
                 if(nb instanceof WirelessBuild){
                     WirelessBuild r = (WirelessBuild)nb;
                     if(!r.links.contains(pos())) r.links.add(pos());
                 }
+                //建立連結：發送端顏色閃光，方便確認有點到
+                flash(nb, senderColor);
             }
+        }
+
+        /** 清除這個方塊的所有連結(同時從對端移除) */
+        public void clearLinks(){
+            for(int i = 0; i < links.size; i++){
+                Building b = world.build(links.get(i));
+                if(b instanceof WirelessBuild) ((WirelessBuild)b).links.removeValue(pos());
+                if(b != null) flash(b, Pal.remove);
+            }
+            links.clear();
+        }
+
+        /** 目標閃一下光；特效出任何問題都不能影響連結本身 */
+        void flash(Building b, Color c){
+            try{
+                Fx.healBlockFull.at(b.x, b.y, 0f, c, b.block);
+            }catch(Throwable ignored){}
         }
 
         @Override
@@ -415,7 +435,10 @@ public class WirelessBelt extends Block{
         public void buildConfiguration(Table table){
             if(sender){
                 ItemSelection.buildTable(WirelessBelt.this, table, content.items(), () -> sortItem, this::configure);
+                table.row();
             }
+            //取消全部連結：不管點選邏輯怎麼樣，都能保證解除
+            table.button(Icon.cancel, Styles.cleari, () -> configure(Boolean.TRUE)).size(40f);
         }
 
         @Override
