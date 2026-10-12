@@ -38,5 +38,5 @@ jobs:
         with:
           tag_name: wb-v${{ github.run_number }}
           name: Wireless Belt build ${{ github.run_number }}
-          body: Android / desktop jar for Mindustry v8 (160.x). Download the jar below and import it in the Mods menu.
+          body: ${{ github.event.head_commit.message || 'Manual build' }}
           files: wirelessbelt-android.jar
