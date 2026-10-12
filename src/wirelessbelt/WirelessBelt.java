@@ -81,7 +81,8 @@ public class WirelessBelt extends Block{
     public void setStats(){
         super.setStats();
         stats.add(Stat.range, range, StatUnit.blocks);
-        stats.add(Stat.itemsMoved, 60f / transferTime, StatUnit.itemsSecond);
+        //每個格子各自計算傳輸速度，總速度 = 單格速度 x 格數
+        stats.add(Stat.itemsMoved, 60f / transferTime * size * size, StatUnit.itemsSecond);
     }
 
     @Override
@@ -96,7 +97,11 @@ public class WirelessBelt extends Block{
         /** 發送端：指定傳送的物品，null = 全部傳送 */
         public Item sortItem;
 
-        public float moveAcc, anim, checkTimer;
+        public float anim, checkTimer;
+        /** 每個格子各自的傳輸計時與輸出方向輪替 */
+        public float[] tileAcc = new float[WirelessBelt.this.size * WirelessBelt.this.size];
+        public int[] tileDump = new int[WirelessBelt.this.size * WirelessBelt.this.size];
+        public Seq<Tile> myTiles = new Seq<>();
         public Item lastItem;
         public int passIndex, rr, itemRR;
 
@@ -132,8 +137,12 @@ public class WirelessBelt extends Block{
             if(links.contains(p)){
                 links.removeValue(p);
                 if(nb instanceof WirelessBuild) ((WirelessBuild)nb).links.removeValue(pos());
+                //解除連結：紅色閃光
+                if(nb != null) Fx.healBlockFull.at(nb.x, nb.y, 0f, Pal.remove, nb.block);
             }else if(canLink(nb)){
                 links.add(p);
+                //建立連結：發送端顏色閃光，方便確認有點到
+                Fx.healBlockFull.at(nb.x, nb.y, 0f, senderColor, nb.block);
                 //接收端會記住發送端；一般建築不需要
                 if(nb instanceof WirelessBuild){
                     WirelessBuild r = (WirelessBuild)nb;
@@ -251,6 +260,28 @@ public class WirelessBelt extends Block{
 
         // ---------- 更新 ----------
 
+        /** 從單一格子往它相鄰的建築輸出一個物品(每個格子獨立) */
+        boolean dumpFromTile(Tile t, int ti){
+            int total = content.items().size;
+            for(int d = 0; d < 4; d++){
+                int di = (tileDump[ti] + d) % 4;
+                Tile n = t.nearby(di);
+                if(n == null) continue;
+                Building b = n.build;
+                if(b == null || b == this || b.team != team) continue;
+                for(int k = 0; k < total; k++){
+                    Item it = content.item((itemRR + k) % total);
+                    if(!items.has(it) || !canDump(b, it) || !b.acceptItem(this, it)) continue;
+                    b.handleItem(this, it);
+                    items.remove(it, 1);
+                    tileDump[ti] = (di + 1) % 4;
+                    itemRR = (it.id + 1) % total;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         @Override
         public void updateTile(){
             //定期清除失效連結
@@ -262,40 +293,47 @@ public class WirelessBelt extends Block{
                 }
             }
 
+            //每個格子都是獨立的傳輸通道，各自計時，不共用速度
             if(sender){
                 if(links.size > 0 && efficiency > 0f && items.total() > 0){
-                    moveAcc += edelta();
-                    int guard = 0;
-                    while(moveAcc >= transferTime && items.total() > 0 && guard++ < 8){
-                        if(!sendOne()){
-                            moveAcc = Math.min(moveAcc, transferTime);
-                            break;
-                        }
-                        anim = 1f;
-                        moveAcc -= transferTime;
-                    }
-                }else{
-                    moveAcc = Math.min(moveAcc, transferTime);
-                }
-                anim = Math.max(0f, anim - Time.delta * 0.03f);
-            }else{
-                if(items.total() > 0 && efficiency > 0f){
-                    moveAcc += edelta();
-                    int guard = 0;
-                    while(moveAcc >= transferTime && items.total() > 0 && guard++ < 8){
-                        if(dump()){
-                            moveAcc -= transferTime;
+                    for(int i = 0; i < tileAcc.length; i++){
+                        tileAcc[i] += edelta();
+                        int guard = 0;
+                        while(tileAcc[i] >= transferTime && items.total() > 0 && guard++ < 4){
+                            if(!sendOne()){
+                                tileAcc[i] = Math.min(tileAcc[i], transferTime);
+                                break;
+                            }
                             anim = 1f;
-                        }else{
-                            moveAcc = Math.min(moveAcc, transferTime);
-                            break;
+                            tileAcc[i] -= transferTime;
                         }
                     }
                 }else{
-                    moveAcc = Math.min(moveAcc, transferTime);
+                    for(int i = 0; i < tileAcc.length; i++) tileAcc[i] = Math.min(tileAcc[i], transferTime);
                 }
-                anim = Math.max(0f, anim - Time.delta * 0.03f);
+            }else{
+                if(myTiles.size == 0) tile.getLinkedTilesAs(block, myTiles);
+
+                if(items.total() > 0 && efficiency > 0f){
+                    for(int i = 0; i < tileAcc.length && i < myTiles.size; i++){
+                        tileAcc[i] += edelta();
+                        int guard = 0;
+                        while(tileAcc[i] >= transferTime && items.total() > 0 && guard++ < 4){
+                            if(dumpFromTile(myTiles.get(i), i)){
+                                tileAcc[i] -= transferTime;
+                                anim = 1f;
+                            }else{
+                                tileAcc[i] = Math.min(tileAcc[i], transferTime);
+                                break;
+                            }
+                        }
+                    }
+                }else{
+                    for(int i = 0; i < tileAcc.length; i++) tileAcc[i] = Math.min(tileAcc[i], transferTime);
+                }
             }
+
+            anim = Math.max(0f, anim - Time.delta * 0.03f);
         }
 
         // ---------- 繪製 / 動畫 ----------
@@ -348,6 +386,16 @@ public class WirelessBelt extends Block{
         @Override
         public void drawSelect(){
             super.drawSelect();
+            drawLinks();
+        }
+
+        /** 點選(設定)狀態下顯示：自己與每個已連結目標的圈圈與箭頭 */
+        @Override
+        public void drawConfigure(){
+            drawLinks();
+        }
+
+        void drawLinks(){
             float sin = Mathf.absin(Time.time, 6f, 1f);
             Drawf.dashCircle(x, y, range * tilesize, color());
             Drawf.circles(x, y, block.size * tilesize / 2f + 1f + sin - 2f, color());
