@@ -20,7 +20,7 @@ import static mindustry.Vars.*;
 /**
  * 無線傳送帶：發送端(sender) 與 接收端(receiver)，連結數量不限(多對多)。
  * 發送端：從任意邊接收物品，符合過濾條件的物品進入 500 容量緩衝，
- *         並輪流無線傳給所有已連結且未滿的接收端；
+ *         並輪流無線傳給所有已連結的目標：接收端，或任何能接收該物品的建築(砲塔、核心、容器...)；
  *         不符合的物品直接穿過，由其他方向相鄰的輸送帶輸出。
  * 接收端：收到物品後，從任意邊輸出到相鄰的輸送帶/方塊。
  */
@@ -28,7 +28,7 @@ public class WirelessBelt extends Block{
     /** 傳輸距離(格)。原版橋接傳送帶為 4 格，這裡是 80 倍 = 320 格 */
     public float range = 4f * 80f;
     /** 每搬運 1 個物品所需 tick。2.5 約為橋接傳送帶的 2 倍速度(請實測後微調) */
-    public float transferTime = 0.5f;
+    public float transferTime = 2.5f;
 
     public final boolean sender;
 
@@ -98,26 +98,31 @@ public class WirelessBelt extends Block{
 
         public float moveAcc, anim, checkTimer;
         public Item lastItem;
-        public int passIndex, rr;
+        public int passIndex, rr, itemRR;
 
         public Color color(){
             return sender ? senderColor : receiverColor;
         }
 
         /** 第 i 個連結對象，無效則回傳 null。不會修改狀態。 */
-        public WirelessBuild linkAt(int i){
+        public Building linkAt(int i){
             Building b = world.build(links.get(i));
-            if(!(b instanceof WirelessBuild) || !b.isValid() || b.team != team) return null;
-            WirelessBuild w = (WirelessBuild)b;
-            if(w.block == block) return null; //必須是另一種(收/送)
-            return w;
+            if(b == null || !b.isValid() || b.team != team) return null;
+            if(b instanceof WirelessBuild){
+                //無線方塊之間必須是另一種(收/送)
+                return b.block == block ? null : b;
+            }
+            //一般建築(砲塔、核心...)只有發送端可以直接連結
+            return sender ? b : null;
         }
 
         public boolean canLink(Building other){
-            if(!sender || other == null || other == this) return false;
-            if(!(other instanceof WirelessBuild) || other.team != team) return false;
-            WirelessBuild r = (WirelessBuild)other;
-            if(r.block == block) return false;
+            if(!sender || other == null || other == this || other.team != team) return false;
+            if(other instanceof WirelessBuild){
+                if(other.block == block) return false; //發送端不能連發送端
+            }else if(!other.block.hasItems){
+                return false; //一般建築必須有物品欄(砲塔、核心、容器、工廠...)
+            }
             return within(other, range * tilesize);
         }
 
@@ -129,8 +134,11 @@ public class WirelessBelt extends Block{
                 if(nb instanceof WirelessBuild) ((WirelessBuild)nb).links.removeValue(pos());
             }else if(canLink(nb)){
                 links.add(p);
-                WirelessBuild r = (WirelessBuild)nb;
-                if(!r.links.contains(pos())) r.links.add(pos());
+                //接收端會記住發送端；一般建築不需要
+                if(nb instanceof WirelessBuild){
+                    WirelessBuild r = (WirelessBuild)nb;
+                    if(!r.links.contains(pos())) r.links.add(pos());
+                }
             }
         }
 
@@ -203,18 +211,42 @@ public class WirelessBelt extends Block{
             if(t != null) t.handleItem(this, item);
         }
 
-        /** 輪流挑選下一個還有空間的接收端 */
-        WirelessBuild nextReceiver(){
+        /** 輪流挑選下一個能接收這個物品的目標(接收端未滿，或一般建築接受該物品) */
+        Building findTarget(Item item){
             int n = links.size;
             for(int i = 0; i < n; i++){
                 int idx = (rr + i) % n;
-                WirelessBuild r = linkAt(idx);
-                if(r != null && r.items.total() < itemCapacity){
+                Building b = linkAt(idx);
+                if(b == null) continue;
+                boolean ok;
+                if(b instanceof WirelessBuild){
+                    ok = b.items.total() < itemCapacity;
+                }else{
+                    ok = b.acceptItem(this, item);
+                }
+                if(ok){
                     rr = (idx + 1) % n;
-                    return r;
+                    return b;
                 }
             }
             return null;
+        }
+
+        /** 嘗試送出一個物品，成功回傳 true。依序檢查緩衝裡的每種物品(砲塔可能只吃其中幾種) */
+        boolean sendOne(){
+            int total = content.items().size;
+            for(int i = 0; i < total; i++){
+                Item it = content.item((itemRR + i) % total);
+                if(!items.has(it)) continue;
+                Building t = findTarget(it);
+                if(t == null) continue;
+                items.remove(it, 1);
+                t.handleItem(this, it);
+                lastItem = it;
+                itemRR = (it.id + 1) % total;
+                return true;
+            }
+            return false;
         }
 
         // ---------- 更新 ----------
@@ -235,15 +267,10 @@ public class WirelessBelt extends Block{
                     moveAcc += edelta();
                     int guard = 0;
                     while(moveAcc >= transferTime && items.total() > 0 && guard++ < 8){
-                        WirelessBuild r = nextReceiver();
-                        if(r == null){
+                        if(!sendOne()){
                             moveAcc = Math.min(moveAcc, transferTime);
                             break;
                         }
-                        Item it = items.take();
-                        if(it == null) break;
-                        r.handleItem(this, it);
-                        lastItem = it;
                         anim = 1f;
                         moveAcc -= transferTime;
                     }
@@ -288,7 +315,7 @@ public class WirelessBelt extends Block{
             //傳輸動畫只由發送端畫，連線到每一個接收端
             if(sender){
                 for(int k = 0; k < links.size; k++){
-                    WirelessBuild r = linkAt(k);
+                    Building r = linkAt(k);
                     if(r == null) continue;
 
                     float dx = r.x - x, dy = r.y - y;
@@ -325,9 +352,10 @@ public class WirelessBelt extends Block{
             Drawf.dashCircle(x, y, range * tilesize, color());
             Drawf.circles(x, y, block.size * tilesize / 2f + 1f + sin - 2f, color());
             for(int i = 0; i < links.size; i++){
-                WirelessBuild p = linkAt(i);
+                Building p = linkAt(i);
                 if(p == null) continue;
-                Drawf.circles(p.x, p.y, block.size * tilesize / 2f + 1f + sin - 2f, p.color());
+                Color pc = p instanceof WirelessBuild ? ((WirelessBuild)p).color() : senderColor;
+                Drawf.circles(p.x, p.y, p.block.size * tilesize / 2f + 1f + sin - 2f, pc);
                 Drawf.arrow(sender ? x : p.x, sender ? y : p.y, sender ? p.x : x, sender ? p.y : y,
                     block.size * tilesize / 2f + sin, 4f + sin, color());
             }
