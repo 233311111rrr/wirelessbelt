@@ -28,7 +28,7 @@ public class WirelessBelt extends Block{
     /** 傳輸距離(格)。原版橋接傳送帶為 4 格，這裡是 80 倍 = 320 格 */
     public float range = 4f * 80f;
     /** 每搬運 1 個物品所需 tick。2.5 約為橋接傳送帶的 2 倍速度(請實測後微調) */
-    public float transferTime = 1f;
+    public float transferTime = 0.5f;
 
     public final boolean sender;
 
