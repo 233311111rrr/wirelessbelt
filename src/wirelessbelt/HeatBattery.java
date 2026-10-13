@@ -23,7 +23,7 @@ import static mindustry.Vars.*;
  */
 public class HeatBattery extends Battery{
     /** 原版電池容量 */
-    public static final float baseCapacity = 10000f;
+    public static final float baseCapacity = 1000f;
 
     public final boolean heats;
     public final float mult;
@@ -108,6 +108,15 @@ public class HeatBattery extends Battery{
                     liquids.remove(l, use);
                     cooled = true;
                     coolMult = l == Liquids.cryofluid ? cryoCool : waterCool;
+                }
+            }
+
+            //液體互通：只要有接觸的發熱電池，液體會依存量自動平均分配
+            Liquid share = liquids.current();
+            if(share != null && liquids.get(share) > 0.01f){
+                for(int i = 0; i < proximity.size; i++){
+                    Building o = proximity.get(i);
+                    if(o instanceof HeatBuild) moveLiquid(o, share);
                 }
             }
 
