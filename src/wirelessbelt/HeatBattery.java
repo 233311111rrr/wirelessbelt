@@ -23,7 +23,7 @@ import static mindustry.Vars.*;
  */
 public class HeatBattery extends Battery{
     /** 原版電池容量 */
-    public static final float baseCapacity = 1000f;
+    public static final float baseCapacity = 10000f;
 
     public final boolean heats;
     public final float mult;
